@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -76,7 +77,16 @@ func main() {
 
 	serverPort := getEnv("SERVER_PORT", "17808")
 	log.Println("Server started on :" + serverPort)
-	log.Fatal(http.ListenAndServe(":"+serverPort, nil))
+
+	listener, err := newListener(":" + serverPort)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Fatal(http.Serve(listener, nil))
+}
+
+func newListener(addr string) (net.Listener, error) {
+	return net.Listen("tcp", addr)
 }
 
 func getEnv(key, def string) string {
