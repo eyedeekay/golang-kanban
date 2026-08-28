@@ -1,34 +1,36 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
-	_ "github.com/lib/pq"
+	bolt "go.etcd.io/bbolt"
 )
 
 const (
 	StatusTodo       = "todo"
 	StatusInProgress = "inprogress"
 	StatusDone       = "done"
+
+	bucketCards = "cards"
 )
 
 type Card struct {
-	ID          int
-	Title       string
-	Description string
-	Subtasks    string
-	Status      string // "todo", "inprogress", "done"
-	CardOrder   int
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Subtasks    string `json:"subtasks"`
+	Status      string `json:"status"`
+	CardOrder   int    `json:"card_order"`
 }
 
-var db *sql.DB
+var db *bolt.DB
 var tmpl *template.Template
 
 type OrderUpdatePayload struct {
@@ -37,26 +39,20 @@ type OrderUpdatePayload struct {
 }
 
 func main() {
-	dbUser := getEnv("DB_USER", "user")
-	dbPass := getEnv("DB_PASS", "password")
-	dbHost := getEnv("DB_HOST", "postgres")
-	dbPort := getEnv("DB_PORT", "5432")
-	dbName := getEnv("DB_NAME", "kanban")
-	connStr := "postgres://" + dbUser + ":" + dbPass + "@" + dbHost + ":" + dbPort + "/" + dbName + "?sslmode=disable"
+	dataPath := getEnv("DATA_PATH", "./data/app.db")
+	os.MkdirAll("./data", 0755)
+
 	var err error
-	db, err = sql.Open("postgres", connStr)
+	db, err = bolt.Open(dataPath, 0600, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer db.Close()
 
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(1)
-
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Printf("Error closing database: %v", err)
-		}
-	}()
+	db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(bucketCards))
+		return err
+	})
 
 	funcMap := template.FuncMap{
 		"split": func(s, sep string) []string {
@@ -70,7 +66,6 @@ func main() {
 	}
 	tmpl = template.Must(template.New("").Funcs(funcMap).ParseGlob("templates/*.html"))
 
-	// Favicon handler to avoid 404.
 	http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -92,10 +87,23 @@ func getEnv(key, def string) string {
 	return v
 }
 
+func cardKey(id int) []byte {
+	return []byte(strconv.Itoa(id))
+}
+
 func getCardByID(id int) (*Card, error) {
 	var card Card
-	err := db.QueryRow("SELECT id, title, description, subtasks, status, card_order FROM cards WHERE id=$1", id).
-		Scan(&card.ID, &card.Title, &card.Description, &card.Subtasks, &card.Status, &card.CardOrder)
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		v := b.Get(cardKey(id))
+		if v == nil {
+			return bolt.ErrBucketNotFound
+		}
+		return json.Unmarshal(v, &card)
+	})
+	if err == bolt.ErrBucketNotFound {
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -112,22 +120,22 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		StatusInProgress: {},
 		StatusDone:       {},
 	}
-	rows, err := db.Query("SELECT id, title, description, subtasks, status, card_order FROM cards ORDER BY status, card_order")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			log.Printf("Error closing rows: %v", err)
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var card Card
+			if err := json.Unmarshal(v, &card); err != nil {
+				continue
+			}
+			cardsByStatus[card.Status] = append(cardsByStatus[card.Status], card)
 		}
-	}()
-	for rows.Next() {
-		var c Card
-		if err := rows.Scan(&c.ID, &c.Title, &c.Description, &c.Subtasks, &c.Status, &c.CardOrder); err != nil {
-			continue
-		}
-		cardsByStatus[c.Status] = append(cardsByStatus[c.Status], c)
+		return nil
+	})
+	for _, cards := range cardsByStatus {
+		sort.Slice(cards, func(i, j int) bool {
+			return cards[i].CardOrder < cards[j].CardOrder
+		})
 	}
 	if err := tmpl.ExecuteTemplate(w, "index.html", cardsByStatus); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -145,27 +153,51 @@ func createCardHandler(w http.ResponseWriter, r *http.Request) {
 	status := r.FormValue("status")
 
 	if status != StatusTodo && status != StatusInProgress && status != StatusDone {
-		status = StatusTodo // Default to todo
+		status = StatusTodo
 	}
 
 	if strings.TrimSpace(title) == "" && strings.TrimSpace(description) == "" && strings.TrimSpace(subtasks) == "" {
 		http.Error(w, "Empty card not allowed", http.StatusBadRequest)
 		return
 	}
+
 	var maxOrder int
-	err := db.QueryRow("SELECT COALESCE(MAX(card_order), 0) FROM cards WHERE status=$1", status).Scan(&maxOrder)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var card Card
+			if err := json.Unmarshal(v, &card); err != nil {
+				continue
+			}
+			if card.Status == status && card.CardOrder > maxOrder {
+				maxOrder = card.CardOrder
+			}
+		}
+		return nil
+	})
 	maxOrder++
+
 	var newID int
-	err = db.QueryRow("INSERT INTO cards (title, description, subtasks, status, card_order) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-		title, description, subtasks, status, maxOrder).Scan(&newID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		id, _ := b.NextSequence()
+		newID = int(id)
+		card := Card{
+			ID:          newID,
+			Title:       title,
+			Description: description,
+			Subtasks:    subtasks,
+			Status:      status,
+			CardOrder:   maxOrder,
+		}
+		data, err := json.Marshal(card)
+		if err != nil {
+			return err
+		}
+		return b.Put(cardKey(newID), data)
+	})
+
 	card := Card{ID: newID, Title: title, Description: description, Subtasks: subtasks, Status: status, CardOrder: maxOrder}
 	if r.Header.Get("HX-Request") != "" {
 		if err := tmpl.ExecuteTemplate(w, "card_fragment.html", card); err != nil {
@@ -176,7 +208,6 @@ func createCardHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// cardRouter dispatches requests based on URL segments: /card/{id}/{action}
 func cardRouter(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 4 {
@@ -211,37 +242,65 @@ func moveCardHandler(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 	newStatus := r.FormValue("status")
-
 	if newStatus != StatusTodo && newStatus != StatusInProgress && newStatus != StatusDone {
 		http.Error(w, "Invalid status", http.StatusBadRequest)
 		return
 	}
-
 	newOrder, err := strconv.Atoi(r.FormValue("order"))
 	if err != nil {
 		http.Error(w, "Invalid order", http.StatusBadRequest)
 		return
 	}
-	_, err = db.Exec("UPDATE cards SET status=$1, card_order=$2 WHERE id=$3", newStatus, newOrder, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Recalculate order for the destination lane.
-	_, err = db.Exec(`
-        WITH OrderedCards AS (
-            SELECT id, ROW_NUMBER() OVER (ORDER BY card_order, id) AS new_order
-            FROM cards
-            WHERE status = $1
-        )
-        UPDATE cards SET card_order = OrderedCards.new_order
-        FROM OrderedCards
-        WHERE cards.id = OrderedCards.id;
-    `, newStatus)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		v := b.Get(cardKey(id))
+		if v == nil {
+			return bolt.ErrBucketNotFound
+		}
+		var card Card
+		if err := json.Unmarshal(v, &card); err != nil {
+			return err
+		}
+		card.Status = newStatus
+		card.CardOrder = newOrder
+		data, err := json.Marshal(card)
+		if err != nil {
+			return err
+		}
+		return b.Put(cardKey(id), data)
+	})
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		cards := make([]Card, 0)
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var card Card
+			if err := json.Unmarshal(v, &card); err != nil {
+				continue
+			}
+			if card.Status == newStatus {
+				cards = append(cards, card)
+			}
+		}
+		sort.Slice(cards, func(i, j int) bool {
+			if cards[i].CardOrder == cards[j].CardOrder {
+				return cards[i].ID < cards[j].ID
+			}
+			return cards[i].CardOrder < cards[j].CardOrder
+		})
+		for i, card := range cards {
+			card.CardOrder = i + 1
+			data, err := json.Marshal(card)
+			if err != nil {
+				continue
+			}
+			b.Put(cardKey(card.ID), data)
+		}
+		return nil
+	})
+
 	if _, err := w.Write([]byte("OK")); err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
@@ -270,11 +329,27 @@ func updateCardHandler(w http.ResponseWriter, r *http.Request, id int) {
 	title := r.FormValue("title")
 	description := r.FormValue("description")
 	subtasks := r.FormValue("subtasks")
-	_, err := db.Exec("UPDATE cards SET title=$1, description=$2, subtasks=$3 WHERE id=$4", title, description, subtasks, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		v := b.Get(cardKey(id))
+		if v == nil {
+			return bolt.ErrBucketNotFound
+		}
+		var card Card
+		if err := json.Unmarshal(v, &card); err != nil {
+			return err
+		}
+		card.Title = title
+		card.Description = description
+		card.Subtasks = subtasks
+		data, err := json.Marshal(card)
+		if err != nil {
+			return err
+		}
+		return b.Put(cardKey(id), data)
+	})
+
 	updated, err := getCardByID(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -290,11 +365,10 @@ func deleteCardHandler(w http.ResponseWriter, r *http.Request, id int) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_, err := db.Exec("DELETE FROM cards WHERE id=$1", id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		return b.Delete(cardKey(id))
+	})
 	if _, err := w.Write([]byte("OK")); err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
@@ -326,13 +400,27 @@ func updateOrderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	for index, cardId := range payload.Order {
-		_, err := db.Exec("UPDATE cards SET status=$1, card_order=$2 WHERE id=$3", payload.Status, index+1, cardId)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketCards))
+		for index, cardId := range payload.Order {
+			v := b.Get(cardKey(cardId))
+			if v == nil {
+				continue
+			}
+			var card Card
+			if err := json.Unmarshal(v, &card); err != nil {
+				continue
+			}
+			card.Status = payload.Status
+			card.CardOrder = index + 1
+			data, err := json.Marshal(card)
+			if err != nil {
+				continue
+			}
+			b.Put(cardKey(cardId), data)
 		}
-	}
+		return nil
+	})
 	if _, err := w.Write([]byte("OK")); err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
