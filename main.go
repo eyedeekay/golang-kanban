@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	bolt "go.etcd.io/bbolt"
+
+	"github.com/kataras/basicauth"
 )
 
 const (
@@ -55,6 +57,13 @@ func main() {
 		return err
 	})
 
+	users := make(map[string]string)
+	data, err := os.ReadFile("users.json")
+	if err == nil {
+		json.Unmarshal(data, &users)
+	}
+	auth := basicauth.Default(users)
+
 	funcMap := template.FuncMap{
 		"split": func(s, sep string) []string {
 			s = strings.TrimSpace(s)
@@ -82,7 +91,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Fatal(http.Serve(listener, nil))
+	log.Fatal(http.Serve(listener, auth(http.DefaultServeMux)))
 }
 
 func newListener(addr string) (net.Listener, error) {
