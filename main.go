@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,13 +43,24 @@ type OrderUpdatePayload struct {
 }
 
 func main() {
-	dataPath := getEnv("DATA_PATH", "./data/app.db")
-	os.MkdirAll("./data", 0755)
-
-	var err error
-	db, err = bolt.Open(dataPath, 0600, nil)
+	baseDir, err := filepath.Abs(".")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to resolve base directory:", err)
+	}
+	dataPath := getEnv("DATA_PATH", "./data/app.db")
+	dataPath, err = filepath.Abs(dataPath)
+	if err != nil {
+		log.Fatal("Invalid DATA_PATH:", err)
+	}
+	if !strings.HasPrefix(dataPath, baseDir) {
+		log.Fatal("DATA_PATH must be within project directory")
+	}
+	os.MkdirAll(filepath.Dir(dataPath), 0755)
+
+	var dbErr error
+	db, dbErr = bolt.Open(dataPath, 0600, nil)
+	if dbErr != nil {
+		log.Fatal(dbErr)
 	}
 	defer db.Close()
 
@@ -58,8 +70,15 @@ func main() {
 	})
 
 	users := make(map[string]string)
-	data, err := os.ReadFile("users.json")
-	if err == nil {
+	usersPath := "users.json"
+	usersPath, err = filepath.Abs(usersPath)
+	if err == nil && !strings.HasPrefix(usersPath, baseDir) {
+		log.Fatal("users.json path must be within project directory")
+	}
+	data, err := os.ReadFile(usersPath)
+	if err != nil {
+		log.Println("Warning: users.json not found, using empty auth:", err)
+	} else {
 		json.Unmarshal(data, &users)
 	}
 	auth := basicauth.Default(users)
@@ -91,7 +110,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Fatal(http.Serve(listener, auth(http.DefaultServeMux)))
+	log.Fatal(http.Serve(listener, securityHeaders(auth(http.DefaultServeMux))))
 }
 
 func newListener(addr string) (net.Listener, error) {
@@ -157,11 +176,13 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err := tmpl.ExecuteTemplate(w, "index.html", cardsByStatus); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 	}
 }
 
 func createCardHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if r.URL.Path != "/card" || r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
@@ -220,7 +241,8 @@ func createCardHandler(w http.ResponseWriter, r *http.Request) {
 	card := Card{ID: newID, Title: title, Description: description, Subtasks: subtasks, Status: status, CardOrder: maxOrder}
 	if r.Header.Get("HX-Request") != "" {
 		if err := tmpl.ExecuteTemplate(w, "card_fragment.html", card); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("Template error: %v", err)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
 		}
 		return
 	}
@@ -332,15 +354,18 @@ func editCardHandler(w http.ResponseWriter, r *http.Request, id int) {
 	}
 	card, err := getCardByID(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		log.Printf("Get card error: %v", err)
+		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 	if err := tmpl.ExecuteTemplate(w, "card_edit_fragment.html", card); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 	}
 }
 
 func updateCardHandler(w http.ResponseWriter, r *http.Request, id int) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -371,11 +396,13 @@ func updateCardHandler(w http.ResponseWriter, r *http.Request, id int) {
 
 	updated, err := getCardByID(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		log.Printf("Get card error: %v", err)
+		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 	if err := tmpl.ExecuteTemplate(w, "card_fragment.html", updated); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 	}
 }
 
@@ -400,21 +427,32 @@ func viewCardHandler(w http.ResponseWriter, r *http.Request, id int) {
 	}
 	card, err := getCardByID(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		log.Printf("Get card error: %v", err)
+		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 	if err := tmpl.ExecuteTemplate(w, "card_fragment.html", card); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
 	}
 }
 
 func updateOrderHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var payload OrderUpdatePayload
 	err := json.NewDecoder(r.Body).Decode(&payload)
+	if err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if payload.Status != StatusTodo && payload.Status != StatusInProgress && payload.Status != StatusDone {
+		http.Error(w, "Invalid status", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -443,4 +481,13 @@ func updateOrderHandler(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte("OK")); err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
 }

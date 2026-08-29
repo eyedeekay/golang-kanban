@@ -1,6 +1,6 @@
 module kanban
 
-go 1.25
+go 1.26.6
 
 require (
 	github.com/kataras/basicauth v0.0.6

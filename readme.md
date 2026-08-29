@@ -21,6 +21,10 @@ It's designed to be simple to deploy and maintain without the extra bloat of mod
 ### How it looks
 ![Screenshot](assets/Screenshot_v1.0.0.png "Screenshot")
 
+Note: `users.json` is an example auth config file and must be replaced with hashed credentials for production use.
+
+Note: TLS must be terminated by a reverse proxy (e.g., nginx, traefik) or configured externally. Direct TLS is not enabled by default.
+
 ### Using Docker Compose
 A sample docker-compose.yml is provided, just use `docker-compose up --build`
 This command will build and run the Kanban service.
