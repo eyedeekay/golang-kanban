@@ -11,38 +11,7 @@
   <script src="/assets/htmx.min.js"></script>
   <!-- SortableJS -->
   <script src="/assets/Sortable.min.js"></script>
-  <style>
-    .modal {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
-      display: none;
-      justify-content: center;
-      align-items: center;
-      z-index: 1000;
-    }
-    .modal.show {
-      display: flex;
-    }
-    .modal-dialog {
-      max-width: 500px;
-      width: 90%;
-      max-height: 90vh;
-      overflow-y: auto;
-    }
-    .modal-content {
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-    }
-    .dark .modal-content {
-      background: #374151;
-      color: white;
-    }
-  </style>
+  <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body class="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-200">
 <div class="container mx-auto py-8 px-4">
@@ -63,7 +32,7 @@
   
   <!-- Global Add New Card Button -->
   <div class="flex justify-center mb-8">
-    <button class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-all duration-200 transform hover:scale-105" onclick="showModal('addCardModal')">
+    <button class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-all duration-200 transform hover:scale-105" data-action="show-modal" data-modal="addCardModal">
       <i class="bi bi-plus mr-2"></i>Add New Card
     </button>
   </div>
@@ -113,11 +82,11 @@
 <div class="modal" id="addCardModal">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form id="addCardForm" hx-post="/card" hx-target="#cards-todo" hx-swap="beforeend" onsubmit="return prepareSubtasks(this)">
+      <form id="addCardForm" hx-post="/card" hx-target="#cards-todo" hx-swap="beforeend">
         <div class="p-6 border-b border-gray-200 dark:border-gray-600">
           <div class="flex justify-between items-center">
             <h5 class="text-xl font-bold text-gray-900 dark:text-white">Add New Card</h5>
-            <button type="button" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" onclick="hideModal('addCardModal')">
+            <button type="button" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" data-action="hide-modal" data-modal="addCardModal">
               <i class="bi bi-x text-2xl"></i>
             </button>
           </div>
@@ -142,7 +111,7 @@
           </div>
         </div>
         <div class="p-6 border-t border-gray-200 dark:border-gray-600 flex justify-end space-x-3">
-          <button type="button" class="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 rounded-lg" onclick="hideModal('addCardModal')">Cancel</button>
+          <button type="button" class="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 rounded-lg" data-action="hide-modal" data-modal="addCardModal">Cancel</button>
           <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">Add Card</button>
         </div>
       </form>
@@ -159,154 +128,6 @@
   </div>
 </div>
 
-<script>
-  // Dark mode functionality
-  function initDarkMode() {
-    const darkModeToggle = document.getElementById('darkModeToggle');
-    const html = document.documentElement;
-    
-    // Check for saved preference or default to light mode
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      html.classList.add('dark');
-    }
-    
-    darkModeToggle.addEventListener('click', () => {
-      html.classList.toggle('dark');
-      localStorage.setItem('theme', html.classList.contains('dark') ? 'dark' : 'light');
-    });
-  }
-
-  // Modal functionality
-  function showModal(modalId) {
-    document.getElementById(modalId).classList.add('show');
-  }
-  
-  function hideModal(modalId) {
-    document.getElementById(modalId).classList.remove('show');
-  }
-  
-  // Close modal when clicking outside
-  document.addEventListener('click', function(e) {
-    if (e.target.classList.contains('modal')) {
-      e.target.classList.remove('show');
-    }
-  });
-
-  // Initialize SortableJS for each cards container.
-  ['cards-todo', 'cards-inprogress', 'cards-done'].forEach(function(id) {
-    var container = document.getElementById(id);
-    if (container) {
-      new Sortable(container, {
-        group: 'kanban',
-        animation: 150,
-        onEnd: function(evt) {
-          // Get destination container ordering.
-          let destContainer = evt.to;
-          let destCardIds = Array.from(destContainer.children)
-              .map(child => child.getAttribute('data-id'))
-              .filter(id => id !== null);
-          let destStatus = destContainer.id.split('-')[1];
-          // Update destination lane.
-          fetch("/card/order", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: destStatus, order: destCardIds.map(Number) })
-          });
-          // If card moved from another lane, update the origin lane as well.
-          if (evt.from !== evt.to) {
-            let originContainer = evt.from;
-            let originCardIds = Array.from(originContainer.children)
-                .map(child => child.getAttribute('data-id'))
-                .filter(id => id !== null);
-            let originStatus = originContainer.id.split('-')[1];
-            fetch("/card/order", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ status: originStatus, order: originCardIds.map(Number) })
-            });
-          }
-        }
-      });
-    }
-  });
-
-  // Function to initialize dynamic subtasks on a container.
-  function initSubtasks(container) {
-    container.addEventListener('click', function(e) {
-      let btn = e.target.closest('.remove-subtask-btn');
-      if (btn && container.contains(btn)) {
-        btn.closest('.subtask-row').remove();
-      }
-    });
-    const form = container.closest('form');
-    if (form) {
-      form.querySelectorAll('.add-subtask-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          const row = document.createElement('div');
-          row.className = 'subtask-row flex items-center space-x-2 mb-2';
-          row.innerHTML = `
-            <input type="checkbox" class="subtask-complete w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
-            <input type="text" class="subtask-text flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm" placeholder="Subtask description">
-            <button type="button" class="remove-subtask-btn text-red-500 hover:text-red-700 p-1" title="Remove">
-              <i class="bi bi-x text-lg"></i>
-            </button>
-          `;
-          container.appendChild(row);
-        });
-      });
-    }
-  }
-
-  // Function to collect subtasks data before form submission.
-  function prepareSubtasks(form) {
-    const container = form.querySelector('.subtasks-container');
-    const hidden = form.querySelector('.subtasks-hidden');
-    let subtasks = [];
-    container.querySelectorAll('.subtask-row').forEach(function(row) {
-      const complete = row.querySelector('.subtask-complete').checked ? "1" : "0";
-      const text = row.querySelector('.subtask-text').value.trim();
-      if (text !== "") {
-        subtasks.push(complete + "|" + text);
-      }
-    });
-    hidden.value = subtasks.join("\n");
-    return true;
-  }
-
-  // HTMX afterSwap handler.
-  document.body.addEventListener("htmx:afterSwap", function(evt) {
-    // If new card added (target is cards-todo), hide the Add Card modal and reset its form.
-    if (evt.detail.target.id === "cards-todo") {
-      hideModal('addCardModal');
-      var form = document.getElementById('addCardForm');
-      if (form) {
-        form.reset();
-        const container = form.querySelector('.subtasks-container');
-        if (container) { container.innerHTML = ""; }
-      }
-    }
-    // If the edit form is loaded into the modal, show the modal and initialize subtasks.
-    if (evt.detail.target.id === "editCardModalContent") {
-      showModal('editCardModal');
-      var container = document.getElementById('editCardModalContent').querySelector('.subtasks-container');
-      if (container) { initSubtasks(container); }
-    }
-    // After a card update (target id starts with "card-"), hide the edit modal.
-    if (evt.detail.target && evt.detail.target.id && evt.detail.target.id.startsWith("card-")) {
-      hideModal('editCardModal');
-    }
-  });
-
-  // Initialize everything on page load.
-  document.addEventListener("DOMContentLoaded", function() {
-    initDarkMode();
-    var addForm = document.getElementById('addCardForm');
-    if (addForm) {
-      var container = addForm.querySelector('.subtasks-container');
-      if (container) { initSubtasks(container); }
-    }
-  });
-</script>
+<script src="/assets/scripts.js"></script>
 </body>
 </html>
