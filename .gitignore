@@ -3,3 +3,6 @@ data/
 *.pem
 *.key
 users.json
+kanban
+*.db
+node_modules/
