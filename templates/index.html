@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body class="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-200">
-<div class="container mx-auto py-8 px-4">
+<div class="py-8 px-0">
   <!-- Header with title and dark mode toggle -->
   <div class="flex justify-between items-center mb-8">
     <h1 class="text-4xl font-bold text-center flex-1 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
@@ -38,9 +38,9 @@
   </div>
   
   <div class="w-full">
-    <div class="grid grid-cols-3 gap-2 w-full">
+    <div class="flex gap-2 w-full">
       <!-- To Do Column -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 w-[31%]">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 flex-1">
         <h3 class="text-xl font-bold text-center mb-4 text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">
           <i class="bi bi-clock text-yellow-500 mr-2"></i>To Do
         </h3>
@@ -52,7 +52,7 @@
       </div>
       
       <!-- In Progress Column -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 w-[31%]">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 flex-1">
         <h3 class="text-xl font-bold text-center mb-4 text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">
           <i class="bi bi-arrow-repeat text-blue-500 mr-2"></i>In Progress
         </h3>
@@ -64,7 +64,7 @@
       </div>
       
       <!-- Done Column -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 w-[31%]">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 flex-1">
         <h3 class="text-xl font-bold text-center mb-4 text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">
           <i class="bi bi-check-circle text-green-500 mr-2"></i>Done
         </h3>
