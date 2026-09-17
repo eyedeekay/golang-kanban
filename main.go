@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"html/template"
 	"log"
@@ -12,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/kataras/basicauth"
@@ -34,8 +38,14 @@ type Card struct {
 	CardOrder   int    `json:"card_order"`
 }
 
-var db *bolt.DB
-var tmpl *template.Template
+var (
+	db       *bolt.DB
+	tmpl     *template.Template
+	markdown = goldmark.New(
+		goldmark.WithExtensions(extension.GFM),
+		goldmark.WithRendererOptions(goldmarkhtml.WithHardWraps()),
+	)
+)
 
 type OrderUpdatePayload struct {
 	Status string `json:"status"`
@@ -55,10 +65,10 @@ func main() {
 	if !strings.HasPrefix(dataPath, baseDir) {
 		log.Fatal("DATA_PATH must be within project directory")
 	}
-	os.MkdirAll(filepath.Dir(dataPath), 0755)
+	os.MkdirAll(filepath.Dir(dataPath), 0o755)
 
 	var dbErr error
-	db, dbErr = bolt.Open(dataPath, 0600, nil)
+	db, dbErr = bolt.Open(dataPath, 0o600, nil)
 	if dbErr != nil {
 		log.Fatal(dbErr)
 	}
@@ -84,6 +94,7 @@ func main() {
 	auth := basicauth.Default(users)
 
 	funcMap := template.FuncMap{
+		"markdown": renderMarkdown,
 		"split": func(s, sep string) []string {
 			s = strings.TrimSpace(s)
 			if s == "" {
@@ -128,6 +139,19 @@ func getEnv(key, def string) string {
 
 func cardKey(id int) []byte {
 	return []byte(strconv.Itoa(id))
+}
+
+func renderMarkdown(source string) template.HTML {
+	if source == "" {
+		return ""
+	}
+
+	var rendered bytes.Buffer
+	if err := markdown.Convert([]byte(source), &rendered); err != nil {
+		// Keep a safe, readable fallback if rendering ever fails.
+		return template.HTML("<p>" + template.HTMLEscapeString(source) + "</p>")
+	}
+	return template.HTML(rendered.String())
 }
 
 func getCardByID(id int) (*Card, error) {

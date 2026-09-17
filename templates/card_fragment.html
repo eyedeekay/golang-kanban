@@ -2,7 +2,7 @@
 <div class="bg-white dark:bg-gray-700 rounded-lg p-4 shadow-md border border-gray-200 dark:border-gray-600 cursor-move hover:shadow-lg transition-all duration-200 transform hover:scale-[1.02]" id="card-{{.ID}}" data-id="{{.ID}}">
   <h5 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">{{.Title}}</h5>
   {{if .Description}}
-    <p class="text-gray-600 dark:text-gray-300 text-sm mb-3 whitespace-pre-wrap">{{.Description}}</p>
+    <div class="markdown-content text-gray-600 dark:text-gray-300 text-sm mb-3">{{markdown .Description}}</div>
   {{end}}
   {{if .Subtasks}}
     <ul class="space-y-1 mb-3">

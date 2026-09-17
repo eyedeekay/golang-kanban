@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -164,5 +165,41 @@ func TestUpdateOrderHandlerWrongMethod(t *testing.T) {
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+}
+
+func TestRenderMarkdown(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		want   []string
+		unwant []string
+	}{
+		{
+			name:  "GFM formatting",
+			input: "**Bold**\n\n- First\n- ~~Second~~",
+			want:  []string{"<strong>Bold</strong>", "<ul>", "<li>First</li>", "<del>Second</del>"},
+		},
+		{
+			name:   "unsafe content is not emitted",
+			input:  "<script>alert(1)</script>\n\n[link](javascript:alert(1))",
+			unwant: []string{"<script", "javascript:"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := string(renderMarkdown(tt.input))
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Errorf("renderMarkdown(%q) = %q; want it to contain %q", tt.input, output, want)
+				}
+			}
+			for _, unwant := range tt.unwant {
+				if strings.Contains(output, unwant) {
+					t.Errorf("renderMarkdown(%q) = %q; must not contain %q", tt.input, output, unwant)
+				}
+			}
+		})
 	}
 }
